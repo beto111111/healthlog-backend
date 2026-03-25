@@ -3,6 +3,7 @@ const express = require('express');
 const multer = require('multer');
 const { supabase, ensureDay, getDayFull, getRecentDays, saveAIAnalysis, getLastAnalysis, getWeekMuscleVolume } = require('./db.js');
 const { parseFitFile, getActivityDate, getActivityHour } = require('./fitParser.js');
+const strava = require('./strava.js');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -527,6 +528,125 @@ app.get('/api/analyses', requireUserId, async (req, res) => {
     .order('created_at', { ascending: false })
     .limit(parseInt(req.query.limit) || 30);
   res.json(data || []);
+});
+
+// ─── STRAVA ───────────────────────────────────────────────────────
+
+// GET /api/strava/auth-url — gera URL de autorização OAuth
+app.get('/api/strava/auth-url', requireUserId, (req, res) => {
+  const clientId = process.env.STRAVA_CLIENT_ID;
+  if (!clientId) return res.status(500).json({ error: 'STRAVA_CLIENT_ID não configurado.' });
+  const redirectUri = `${process.env.APP_URL || 'https://beto111111.github.io'}/strava-callback.html`;
+  res.json({ url: strava.getAuthUrl(clientId, redirectUri) });
+});
+
+// POST /api/strava/exchange — troca code por tokens e salva no perfil
+app.post('/api/strava/exchange', requireUserId, async (req, res) => {
+  const { code } = req.body;
+  if (!code) return res.status(400).json({ error: 'code obrigatório.' });
+  const clientId = process.env.STRAVA_CLIENT_ID;
+  const clientSecret = process.env.STRAVA_CLIENT_SECRET;
+  if (!clientId || !clientSecret) return res.status(500).json({ error: 'Credenciais Strava não configuradas.' });
+  try {
+    const tokens = await strava.exchangeCode(clientId, clientSecret, code);
+    // Salva tokens no perfil do usuário
+    await supabase.from('user_profile').update({
+      strava_access_token: tokens.access_token,
+      strava_refresh_token: tokens.refresh_token,
+      strava_expires_at: tokens.expires_at,
+      strava_athlete_id: tokens.athlete?.id?.toString(),
+      strava_athlete_name: `${tokens.athlete?.firstname || ''} ${tokens.athlete?.lastname || ''}`.trim(),
+    }).eq('user_id', req.userId);
+    res.json({
+      ok: true,
+      athlete: tokens.athlete?.firstname,
+      expires_at: tokens.expires_at,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/strava/sync/:date — sincroniza atividades do dia com a timeline
+app.post('/api/strava/sync/:date', requireUserId, async (req, res) => {
+  try {
+    const date = req.params.date;
+    // Busca tokens do perfil
+    const { data: profile } = await supabase
+      .from('user_profile').select('strava_access_token,strava_refresh_token,strava_expires_at')
+      .eq('user_id', req.userId).maybeSingle();
+
+    if (!profile?.strava_access_token) {
+      return res.status(401).json({ error: 'Strava não conectado. Autorize primeiro.' });
+    }
+
+    // Renova token se necessário
+    const accessToken = await strava.getValidToken(
+      { access_token: profile.strava_access_token, refresh_token: profile.strava_refresh_token, expires_at: profile.strava_expires_at },
+      supabase, req.userId
+    );
+
+    // Busca atividades do dia
+    const activities = await strava.getActivitiesForDate(accessToken, date);
+    if (!activities.length) {
+      return res.json({ ok: true, imported: 0, message: 'Nenhuma atividade encontrada para este dia.' });
+    }
+
+    await ensureDay(req.userId, date);
+
+    const imported = [];
+    for (const activity of activities) {
+      // Verifica se já foi importado (pelo strava_id no campo data)
+      const { data: existing } = await supabase
+        .from('timeline_entries')
+        .select('id')
+        .eq('user_id', req.userId)
+        .eq('date', date)
+        .filter('data->>strava_id', 'eq', activity.id.toString())
+        .maybeSingle();
+
+      if (existing) continue; // já importado, pula
+
+      const entry = strava.stravaActivityToTimeline(activity);
+      const { data: inserted } = await supabase
+        .from('timeline_entries')
+        .insert({ ...entry, user_id: req.userId, date })
+        .select().maybeSingle();
+
+      // Atualiza calorias no dia se disponível
+      if (activity.calories) {
+        await supabase.from('days').update({ active_calories: activity.calories })
+          .eq('user_id', req.userId).eq('date', date);
+      }
+
+      imported.push({
+        name: activity.name,
+        type: entry.type,
+        duration_min: entry.duration_min,
+        distance_km: entry.data?.distance_km,
+      });
+    }
+
+    res.json({ ok: true, imported: imported.length, activities: imported });
+  } catch (e) {
+    console.error('[Strava sync]', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/strava/status — verifica se Strava está conectado
+app.get('/api/strava/status', requireUserId, async (req, res) => {
+  const { data: profile } = await supabase
+    .from('user_profile')
+    .select('strava_athlete_name,strava_expires_at,strava_access_token')
+    .eq('user_id', req.userId).maybeSingle();
+
+  const connected = !!profile?.strava_access_token;
+  res.json({
+    connected,
+    athlete_name: profile?.strava_athlete_name || null,
+    expires_at: profile?.strava_expires_at || null,
+  });
 });
 
 // ─── HELPERS ──────────────────────────────────────────────────────

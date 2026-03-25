@@ -277,3 +277,39 @@ create trigger trg_days_updated
 create trigger trg_profile_updated
   before update on user_profile
   for each row execute function update_updated_at();
+
+-- ─── CÓDIGOS DE ACESSO ────────────────────────────────────────────
+-- Execute este bloco no SQL Editor do Supabase para adicionar o sistema de login
+
+create table if not exists access_codes (
+  id         uuid primary key default uuid_generate_v4(),
+  code       text not null unique,        -- "BETO", "PEDRO", "LUCAS"
+  user_id    text not null unique,        -- UUID fixo associado ao código
+  name       text,                        -- nome amigável
+  created_at timestamptz default now(),
+  last_login timestamptz
+);
+
+alter table access_codes disable row level security;
+
+-- Corrigir coluna devices ausente no user_profile
+alter table user_profile add column if not exists devices jsonb default '[]';
+
+-- ── INSERIR USUÁRIOS DE TESTE ──────────────────────────────────────
+-- Substitua os UUIDs por valores gerados (ou deixe o banco gerar)
+insert into access_codes (code, user_id, name) values
+  ('BETO',  gen_random_uuid()::text, 'Beto'),
+  ('PEDRO', gen_random_uuid()::text, 'Pedro'),
+  ('LUCAS', gen_random_uuid()::text, 'Lucas')
+on conflict (code) do nothing;
+
+-- Para ver os códigos e user_ids criados:
+-- select code, user_id, name from access_codes;
+
+-- ─── COLUNAS STRAVA no user_profile ──────────────────────────────
+-- Execute no SQL Editor do Supabase
+alter table user_profile add column if not exists strava_access_token  text;
+alter table user_profile add column if not exists strava_refresh_token text;
+alter table user_profile add column if not exists strava_expires_at    bigint;
+alter table user_profile add column if not exists strava_athlete_id    text;
+alter table user_profile add column if not exists strava_athlete_name  text;
