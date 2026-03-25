@@ -10,12 +10,13 @@ const supabase = createClient(
 
 // Garante que o "dia" existe antes de inserir dados nele
 export async function ensureDay(userId, date) {
-  const { data, error } = await supabase
+  const { error } = await supabase
     .from('days')
-    .upsert({ user_id: userId, date }, { onConflict: 'user_id,date', ignoreDuplicates: true })
-    .select('id')
-    .single();
-  if (error && error.code !== '23505') throw error; // ignora conflict
+    .upsert(
+      { user_id: userId, date },
+      { onConflict: 'user_id,date', ignoreDuplicates: true }
+    );
+  if (error && error.code !== '23505') throw error;
   return date;
 }
 
@@ -93,7 +94,7 @@ export async function saveAIAnalysis(userId, date, type, contextData, result) {
       correlations: result.correlacoes || result.correlations,
     })
     .select()
-    .single();
+    .maybeSingle();
   return data;
 }
 

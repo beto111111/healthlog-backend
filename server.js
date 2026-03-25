@@ -106,12 +106,13 @@ app.get('/api/profile', requireUserId, async (req, res) => {
 
 // POST /api/profile — cria ou atualiza
 app.post('/api/profile', requireUserId, async (req, res) => {
-  const { data, error } = await supabase
+  const { error } = await supabase
     .from('user_profile')
     .upsert({ ...req.body, user_id: req.userId, updated_at: new Date().toISOString() },
-             { onConflict: 'user_id' })
-    .select().single();
+             { onConflict: 'user_id' });
   if (error) return res.status(500).json({ error: error.message });
+  // Busca o perfil atualizado
+  const { data } = await supabase.from('user_profile').select('*').eq('user_id', req.userId).maybeSingle();
   res.json(data);
 });
 
@@ -129,14 +130,15 @@ app.get('/api/day/:date', requireUserId, async (req, res) => {
 app.put('/api/day/:date', requireUserId, async (req, res) => {
   try {
     await ensureDay(req.userId, req.params.date);
-    const { data, error } = await supabase
+    const { error } = await supabase
       .from('days')
       .update({ ...req.body, updated_at: new Date().toISOString() })
-      .eq('user_id', req.userId).eq('date', req.params.date)
-      .select().single();
+      .eq('user_id', req.userId).eq('date', req.params.date);
     if (error) return res.status(500).json({ error: error.message });
+    const { data } = await supabase.from('days').select('*').eq('user_id', req.userId).eq('date', req.params.date).maybeSingle();
     res.json(data);
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
 });
 
 // GET /api/days?limit=7 — últimos N dias
@@ -166,7 +168,7 @@ app.post('/api/timeline/:date', requireUserId, async (req, res) => {
     const { data, error } = await supabase
       .from('timeline_entries')
       .insert({ ...req.body, user_id: req.userId, date: req.params.date })
-      .select().single();
+      .select().maybeSingle();
     if (error) return res.status(500).json({ error: error.message });
     res.json(data);
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -177,7 +179,7 @@ app.put('/api/timeline/entry/:id', requireUserId, async (req, res) => {
   const { data, error } = await supabase
     .from('timeline_entries').update(req.body)
     .eq('id', req.params.id).eq('user_id', req.userId)
-    .select().single();
+    .select().maybeSingle();
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 });
@@ -239,7 +241,7 @@ app.post('/api/import/fit', requireUserId, upload.single('file'), async (req, re
     const { data: tlEntry, error: tlErr } = await supabase
       .from('timeline_entries')
       .insert({ ...timelineData, user_id: req.userId, date })
-      .select().single();
+      .select().maybeSingle();
 
     if (tlErr) throw tlErr;
 
@@ -309,7 +311,7 @@ app.post('/api/meal/:date', requireUserId, async (req, res) => {
     const { data, error } = await supabase
       .from('meals')
       .insert({ ...req.body, user_id: req.userId, date: req.params.date })
-      .select().single();
+      .select().maybeSingle();
     if (error) return res.status(500).json({ error: error.message });
 
     // Atualiza totais do dia
