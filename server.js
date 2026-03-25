@@ -536,7 +536,7 @@ app.get('/api/analyses', requireUserId, async (req, res) => {
 app.get('/api/strava/auth-url', requireUserId, (req, res) => {
   const clientId = process.env.STRAVA_CLIENT_ID;
   if (!clientId) return res.status(500).json({ error: 'STRAVA_CLIENT_ID não configurado.' });
-  const redirectUri = `${process.env.APP_URL || 'https://beto111111.github.io'}/strava-callback.html`;
+  const redirectUri = `${process.env.APP_URL || 'https://beto111111.github.io'}/healthlog/strava-callback.html`;
   res.json({ url: strava.getAuthUrl(clientId, redirectUri) });
 });
 
