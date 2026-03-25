@@ -1,14 +1,16 @@
 services:
   - type: web
-    name: healthlog-backend
+    name: healthlog-v2-backend
     env: node
     plan: free
     buildCommand: npm install
     startCommand: npm start
     envVars:
       - key: ANTHROPIC_API_KEY
-        sync: false        # você cola o valor no dashboard do Render
-      - key: ALLOWED_ORIGIN
-        sync: false        # cole a URL do seu GitHub Pages aqui
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
       - key: NODE_ENV
         value: production

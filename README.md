@@ -1,81 +1,106 @@
-# HealthLog Backend
+# HealthLog v2 — Backend
 
-Servidor Node.js que funciona como proxy entre o PWA e as APIs externas (Anthropic, Oura, Spotify), resolvendo o bloqueio de CORS do navegador.
+Node.js + Supabase + Claude. Gerencia todos os dados do app de forma persistente.
 
 ---
 
-## 🚀 Deploy no Render (gratuito, ~5 minutos)
+## 🗄️ Estrutura de dados (pastas por dia)
 
-### Passo 1 — Criar repositório no GitHub para o backend
+```
+Supabase PostgreSQL
+│
+├── user_profile          — onboarding, identidade, metas, XP
+│
+├── days/                 — PASTA DO DIA (1 linha por dia)
+│   └── 2024-03-24        — sono, readiness, day summary, atividade, nutrição
+│
+├── timeline_entries/     — chips da timeline (vinculados ao dia)
+│   ├── gym @ 10:30       — {muscles, volume, sets}
+│   ├── meal @ 13:00      — {kcal, macros}
+│   └── sauna @ 12:00     — {temp, duration}
+│
+├── workout_sets/         — séries detalhadas de cada exercício
+│   ├── Bench Press — set 1 — 80kg x 8 reps
+│   └── Squat — set 2 — 100kg x 6 reps
+│
+├── meals/                — refeições com macros
+│
+├── weekly_muscle_volume/ — volume por músculo na semana
+│   ├── chest             — 15 séries, 2400kg volume
+│   └── legs              — 20 séries, 8000kg volume
+│
+├── ai_analyses/          — histórico de análises da IA
+│
+└── day_plans/            — plano do dia seguinte (habit stacking)
+```
 
-1. Acesse **github.com** → **New repository**
-2. Nome: `healthlog-backend`
-3. **Public** → Create repository
-4. Faça upload dos arquivos desta pasta (`server.js`, `package.json`, `render.yaml`, `.gitignore`)
+---
 
-### Passo 2 — Criar conta no Render
+## 🚀 Setup Supabase (5 min)
 
-1. Acesse **render.com**
-2. Clique em **"Get Started for Free"**
-3. Conecte com sua conta do **GitHub**
+1. Acesse **supabase.com** → New Project (gratuito, sem cartão)
+2. Dê um nome ao projeto (ex: `healthlog`)
+3. Anote a senha do banco (guarde em local seguro)
+4. Vá em **SQL Editor** → cole todo o conteúdo de `schema.sql` → Run
+5. Vá em **Settings → API**:
+   - Copie a **Project URL** → será `SUPABASE_URL`
+   - Copie a **service_role key** (não a anon) → será `SUPABASE_SERVICE_KEY`
 
-### Passo 3 — Criar o serviço
+---
 
-1. No dashboard do Render → **"New +"** → **"Web Service"**
-2. Conecte o repositório `healthlog-backend`
-3. Render detecta automaticamente Node.js — clique em **"Create Web Service"**
+## 🚀 Deploy no Render
 
-### Passo 4 — Configurar variáveis de ambiente
-
-No painel do serviço → **"Environment"** → adicione:
+1. Crie repositório `healthlog-v2-backend` no GitHub
+2. Faça upload dos arquivos desta pasta
+3. No **render.com** → New Web Service → conecte o repositório
+4. Em **Environment Variables** adicione:
 
 | Variável | Valor |
 |----------|-------|
-| `ANTHROPIC_API_KEY` | `sk-ant-...` (sua key da Anthropic) |
-| `ALLOWED_ORIGIN` | `https://beto111111.github.io` (URL do seu GitHub Pages) |
+| `ANTHROPIC_API_KEY` | `sk-ant-...` |
+| `SUPABASE_URL` | `https://xxxx.supabase.co` |
+| `SUPABASE_SERVICE_KEY` | `eyJhbGc...` (service_role) |
 
-### Passo 5 — Pegar a URL do backend
-
-Após o deploy (~2 min), o Render gera uma URL tipo:
-```
-https://healthlog-backend.onrender.com
-```
-
-Copie essa URL — você vai colar no app.
-
-### Passo 6 — Atualizar o PWA
-
-No arquivo `index.html` do seu repositório do GitHub Pages, procure por:
-```javascript
-const BACKEND_URL = 'SEU_BACKEND_URL_AQUI';
-```
-E substitua pela URL do Render.
+5. Deploy — URL será `https://healthlog-v2-backend.onrender.com`
 
 ---
 
-## ⚠️ Limitação do free tier do Render
+## 📡 Rotas principais
 
-O plano gratuito do Render **hiberna após 15 minutos de inatividade** — a primeira requisição após esse período demora ~30 segundos para "acordar" o servidor.
+### Perfil
+- `GET /api/profile` — busca perfil + onboarding
+- `POST /api/profile` — salva/atualiza perfil
 
-Para um protótipo pessoal isso é completamente aceitável. Para evitar, você pode:
-- Usar um serviço como **UptimeRobot** (gratuito) para fazer ping a cada 10 min
-- Ou upgrade para o plano pago ($7/mês) quando quiser
+### Dias (pasta do dia)
+- `GET /api/day/2024-03-24` — tudo do dia (sono, timeline, refeições, treino)
+- `PUT /api/day/2024-03-24` — atualiza dados do dia
+- `GET /api/days?limit=7` — últimos N dias
+
+### Timeline
+- `GET /api/timeline/2024-03-24` — entradas da timeline
+- `POST /api/timeline/2024-03-24` — adiciona chip
+- `PUT /api/timeline/entry/:id` — move/edita chip
+- `DELETE /api/timeline/entry/:id` — remove chip
+
+### Importação
+- `POST /api/import/fit` — processa arquivo .fit do Garmin
+
+### Refeições
+- `POST /api/meal/2024-03-24` — salva refeição + atualiza totais do dia
+
+### Análises IA
+- `POST /api/analysis/morning/2024-03-24` — análise matinal (sono + dia anterior)
+- `POST /api/analysis/day/2024-03-24` — análise do dia + plano de amanhã
+
+### Músculo
+- `GET /api/muscle-volume/2024-03-18` — volume semanal (começando na segunda)
+
+### Oura Proxy
+- `GET /api/oura/:endpoint?start_date=&end_date=` — proxy para API do Oura
 
 ---
 
-## 🔌 Rotas disponíveis
+## 🔑 Autenticação do app
 
-| Rota | Método | Descrição |
-|------|--------|-----------|
-| `GET /` | GET | Health check |
-| `POST /api/claude` | POST | Proxy para Anthropic API |
-| `GET /api/oura/:endpoint` | GET | Proxy para Oura API (futuro) |
-| `GET /api/spotify/recent` | GET | Proxy para Spotify (futuro) |
-
----
-
-## 🔒 Segurança
-
-- A `ANTHROPIC_API_KEY` fica **apenas no servidor** — nunca exposta no frontend
-- O `ALLOWED_ORIGIN` restringe quem pode chamar o backend
-- Nenhum dado do usuário é armazenado no servidor
+Cada request do PWA envia o header `x-user-id` com um UUID gerado localmente no primeiro uso.
+Simples e suficiente para uso pessoal. Para multi-usuário no futuro, migrar para Supabase Auth.
