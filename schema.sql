@@ -313,3 +313,35 @@ alter table user_profile add column if not exists strava_refresh_token text;
 alter table user_profile add column if not exists strava_expires_at    bigint;
 alter table user_profile add column if not exists strava_athlete_id    text;
 alter table user_profile add column if not exists strava_athlete_name  text;
+
+-- ─── REFEIÇÕES v2 (com análise IA + feed social) ──────────────────
+alter table meals add column if not exists photo_base64  text;
+alter table meals add column if not exists photo_mime    text default 'image/jpeg';
+alter table meals add column if not exists ai_nutrition  jsonb;
+alter table meals add column if not exists ai_tips       jsonb default '[]';
+alter table meals add column if not exists user_name     text;
+alter table meals add column if not exists is_public     boolean default true;
+
+-- Reações dos usuários às refeições (feed social)
+create table if not exists meal_reactions (
+  id          uuid primary key default uuid_generate_v4(),
+  meal_id     uuid references meals(id) on delete cascade,
+  reactor_id  text not null,          -- user_id de quem reagiu
+  reactor_name text,                  -- nome amigável
+  score       int check (score >= 0 and score <= 10),
+  comment     text,
+  created_at  timestamptz default now(),
+  updated_at  timestamptz default now(),
+  unique(meal_id, reactor_id)
+);
+alter table meal_reactions disable row level security;
+
+-- Perfil: adicionar campos nutricionais
+alter table user_profile add column if not exists weight_kg   numeric(5,1);
+alter table user_profile add column if not exists height_cm   int;
+alter table user_profile add column if not exists age         int;
+alter table user_profile add column if not exists display_name text;
+
+-- Índices
+create index if not exists idx_meals_public on meals(is_public, created_at desc);
+create index if not exists idx_reactions_meal on meal_reactions(meal_id);
