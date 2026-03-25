@@ -676,3 +676,209 @@ app.listen(PORT, () => {
   console.log(`Supabase: ${process.env.SUPABASE_URL ? '✓' : '✗'}`);
   console.log(`Claude: ${process.env.ANTHROPIC_API_KEY ? '✓' : '✗'}`);
 });
+
+// ─── REFEIÇÕES — ANÁLISE DE IMAGEM + FEED SOCIAL ─────────────────
+
+// POST /api/meal/analyze — analisa foto com Claude Vision
+app.post('/api/meal/analyze', requireUserId, async (req, res) => {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return res.status(500).json({ error: 'API key não configurada.' });
+
+  const { photo_base64, photo_mime, meal_type, date } = req.body;
+  if (!photo_base64) return res.status(400).json({ error: 'Foto obrigatória.' });
+
+  // Busca perfil para personalizar %VD
+  const { data: profile } = await supabase
+    .from('user_profile')
+    .select('weight_kg, height_cm, age, primary_goal')
+    .eq('user_id', req.userId)
+    .maybeSingle();
+
+  const weight = profile?.weight_kg || 70;
+  const height = profile?.height_cm || 170;
+  const age = profile?.age || 30;
+  const goal = profile?.primary_goal || 'health';
+
+  // TMB de Harris-Benedict para calcular necessidade calórica estimada
+  const tmb = Math.round(10 * weight + 6.25 * height - 5 * age + 5);
+  const dailyKcal = Math.round(tmb * 1.55); // fator atividade moderada
+
+  try {
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 1000,
+        system: `Você é nutricionista especialista em análise visual de alimentos.
+Analise a foto do prato e estime a composição nutricional completa.
+Perfil do usuário: ${weight}kg, ${height}cm, ${age} anos. Necessidade calórica diária estimada: ${dailyKcal} kcal. Objetivo: ${goal}.
+Retorne APENAS JSON válido (sem markdown):
+{
+  "nome": "nome do prato/refeição",
+  "descricao": "descrição breve do que você vê",
+  "kcal": 0,
+  "prot_g": 0,
+  "carb_g": 0,
+  "fat_g": 0,
+  "fiber_g": 0,
+  "sodio_mg": 0,
+  "porcao_g": 0,
+  "confianca": "alta|media|baixa",
+  "vd_percent": {
+    "kcal": 0,
+    "prot": 0,
+    "carb": 0,
+    "fat": 0,
+    "fiber": 0,
+    "sodio": 0
+  },
+  "itens": ["item1", "item2"],
+  "dicas": [
+    {"tipo": "positivo|negativo|substituicao", "texto": "dica curta", "alternativa": "sugestão opcional"}
+  ],
+  "classificacao": "otimo|bom|regular|ruim",
+  "nota_nutricional": 0
+}`,
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'image', source: { type: 'base64', media_type: photo_mime || 'image/jpeg', data: photo_base64 } },
+            { type: 'text', text: `Analise esta refeição (${meal_type || 'refeição'}) e retorne o JSON nutricional completo.` }
+          ]
+        }]
+      })
+    });
+
+    const aiData = await r.json();
+    const text = aiData.content?.[0]?.text || '{}';
+    const nutrition = JSON.parse(text.replace(/```json|```/g, '').trim());
+
+    // Recalcula %VD com base no perfil real
+    nutrition.vd_percent = {
+      kcal:   Math.round((nutrition.kcal   / dailyKcal)  * 100),
+      prot:   Math.round((nutrition.prot_g / (weight * 1.6)) * 100), // 1.6g/kg para ativos
+      carb:   Math.round((nutrition.carb_g / (dailyKcal * 0.5 / 4)) * 100),
+      fat:    Math.round((nutrition.fat_g  / (dailyKcal * 0.3 / 9)) * 100),
+      fiber:  Math.round((nutrition.fiber_g / 25) * 100),
+      sodio:  Math.round((nutrition.sodio_mg / 2300) * 100),
+    };
+    nutrition.daily_kcal_ref = dailyKcal;
+
+    res.json(nutrition);
+  } catch (e) {
+    console.error('[meal analyze]', e);
+    res.status(500).json({ error: 'Erro na análise: ' + e.message });
+  }
+});
+
+// POST /api/meal/save — salva refeição com análise
+app.post('/api/meal/save', requireUserId, async (req, res) => {
+  const { date, meal_type, hour, photo_base64, photo_mime, ai_nutrition, notes } = req.body;
+  if (!date) return res.status(400).json({ error: 'date obrigatório.' });
+
+  const { data: profile } = await supabase
+    .from('user_profile')
+    .select('display_name')
+    .eq('user_id', req.userId)
+    .maybeSingle();
+
+  await ensureDay(req.userId, date);
+
+  const { data, error } = await supabase.from('meals').insert({
+    user_id: req.userId,
+    date,
+    meal_type: meal_type || 'refeição',
+    hour: hour || 12,
+    kcal: ai_nutrition?.kcal,
+    prot_g: ai_nutrition?.prot_g,
+    carb_g: ai_nutrition?.carb_g,
+    fat_g: ai_nutrition?.fat_g,
+    fiber_g: ai_nutrition?.fiber_g,
+    photo_base64: photo_base64 || null,
+    photo_mime: photo_mime || 'image/jpeg',
+    ai_nutrition,
+    ai_tips: ai_nutrition?.dicas || [],
+    notes,
+    user_name: profile?.display_name || 'Usuário',
+    is_public: true,
+  }).select().maybeSingle();
+
+  if (error) return res.status(500).json({ error: error.message });
+
+  // Atualiza totais do dia
+  const { data: meals } = await supabase
+    .from('meals').select('kcal,prot_g,carb_g,fat_g')
+    .eq('user_id', req.userId).eq('date', date);
+  const totals = (meals||[]).reduce((a,m)=>({
+    kcal: a.kcal+(m.kcal||0), prot: a.prot+(m.prot_g||0),
+    carb: a.carb+(m.carb_g||0), fat: a.fat+(m.fat_g||0)
+  }), {kcal:0,prot:0,carb:0,fat:0});
+  await supabase.from('days').update({
+    meals_kcal_total: totals.kcal, meals_prot_total: totals.prot,
+    meals_carb_total: totals.carb, meals_fat_total: totals.fat,
+  }).eq('user_id', req.userId).eq('date', date);
+
+  res.json(data);
+});
+
+// GET /api/meal/feed?limit=20 — feed social de todos os usuários
+app.get('/api/meal/feed', requireUserId, async (req, res) => {
+  const limit = parseInt(req.query.limit) || 20;
+  const { data: meals, error } = await supabase
+    .from('meals')
+    .select('id,user_id,user_name,date,meal_type,hour,photo_base64,photo_mime,ai_nutrition,notes,created_at')
+    .eq('is_public', true)
+    .not('photo_base64', 'is', null)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+
+  if (error) return res.status(500).json({ error: error.message });
+
+  // Busca reações para cada refeição
+  const mealIds = (meals||[]).map(m => m.id);
+  const { data: reactions } = await supabase
+    .from('meal_reactions')
+    .select('*')
+    .in('meal_id', mealIds.length ? mealIds : ['none']);
+
+  const mealWithReactions = (meals||[]).map(m => ({
+    ...m,
+    photo_base64: m.photo_base64 ? m.photo_base64.substring(0, 50) + '...' : null, // truncate for listing
+    reactions: (reactions||[]).filter(r => r.meal_id === m.id),
+    my_reaction: (reactions||[]).find(r => r.meal_id === m.id && r.reactor_id === req.userId) || null,
+  }));
+
+  res.json(mealWithReactions);
+});
+
+// GET /api/meal/:id — detalhes completos de uma refeição (com foto)
+app.get('/api/meal/:id', requireUserId, async (req, res) => {
+  const { data: meal } = await supabase
+    .from('meals').select('*').eq('id', req.params.id).maybeSingle();
+  if (!meal) return res.status(404).json({ error: 'Não encontrado.' });
+
+  const { data: reactions } = await supabase
+    .from('meal_reactions').select('*').eq('meal_id', req.params.id);
+
+  res.json({ ...meal, reactions: reactions || [] });
+});
+
+// POST /api/meal/:id/react — adiciona/atualiza reação
+app.post('/api/meal/:id/react', requireUserId, async (req, res) => {
+  const { score, comment } = req.body;
+  const { data: profile } = await supabase
+    .from('user_profile').select('display_name').eq('user_id', req.userId).maybeSingle();
+
+  const { data, error } = await supabase.from('meal_reactions').upsert({
+    meal_id: req.params.id,
+    reactor_id: req.userId,
+    reactor_name: profile?.display_name || 'Usuário',
+    score,
+    comment,
+    updated_at: new Date().toISOString(),
+  }, { onConflict: 'meal_id,reactor_id' }).select().maybeSingle();
+
+  if (error) return res.status(500).json({ error: error.message });
+  res.json(data);
+});
