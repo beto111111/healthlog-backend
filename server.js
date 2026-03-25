@@ -197,8 +197,8 @@ app.post('/api/import/fit', requireUserId, upload.single('file'), async (req, re
 
   try {
     const fitResult = await parseFitFile(req.file.buffer);
-    const date = getActivityDate(fitResult) || req.query.date;
-    if (!date) return res.status(400).json({ error: 'Não foi possível determinar a data da atividade.' });
+    console.log('[FIT] sport:', fitResult.sport, '| subsport:', fitResult.subsport, '| sets:', fitResult.sets?.length, '| records:', fitResult.records?.length, '| summary:', JSON.stringify(fitResult.summary));
+    const date = getActivityDate(fitResult) || req.query.date || new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' });
 
     await ensureDay(req.userId, date);
 

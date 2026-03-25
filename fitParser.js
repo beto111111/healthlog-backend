@@ -238,20 +238,47 @@ export function parseFitFile(buffer) {
   });
 }
 
-// Detecta data da atividade do .fit
+// Detecta data da atividade do .fit — múltiplos fallbacks
 export function getActivityDate(fitResult) {
-  const ts = fitResult.summary?.startTime || fitResult.activity?.timestamp;
-  if (!ts) return null;
-  const d = new Date(ts);
-  // Local date em São Paulo
-  return d.toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' });
+  // Tenta todas as fontes possíveis de timestamp
+  const ts =
+    fitResult.summary?.startTime ||
+    fitResult.activity?.timestamp ||
+    fitResult.activity?.local_timestamp ||
+    fitResult.records?.[0]?.timestamp ||
+    fitResult.laps?.[0]?.start_time ||
+    null;
+
+  if (ts) {
+    const d = new Date(ts);
+    if (!isNaN(d.getTime())) {
+      return d.toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' });
+    }
+  }
+
+  // Se não achou timestamp, usa a data de hoje como fallback
+  const now = new Date();
+  return now.toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' });
 }
 
-// Detecta horário de início (para posicionar na timeline)
+// Detecta horário de início para posicionar na timeline
 export function getActivityHour(fitResult) {
-  const ts = fitResult.summary?.startTime || fitResult.activity?.timestamp;
-  if (!ts) return null;
+  const ts =
+    fitResult.summary?.startTime ||
+    fitResult.activity?.timestamp ||
+    fitResult.records?.[0]?.timestamp ||
+    null;
+
+  if (!ts) return 10; // fallback: 10h
+
   const d = new Date(ts);
-  const parts = d.toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit' }).split(':');
+  if (isNaN(d.getTime())) return 10;
+
+  const parts = d.toLocaleTimeString('pt-BR', {
+    timeZone: 'America/Sao_Paulo',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).split(':');
+
   return parseFloat(parts[0]) + parseFloat(parts[1]) / 60;
 }
