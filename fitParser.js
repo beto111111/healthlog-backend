@@ -1,7 +1,8 @@
 // fitParser.js — Parser de arquivos .fit do Garmin
 // Extrai exercícios, séries, pesos e grupos musculares
 
-import FitParser from 'fit-file-parser';
+import FitParserLib from 'fit-file-parser';
+const FitParser = FitParserLib.default || FitParserLib;
 
 // Mapeamento de exercise_category + exercise_name → músculos
 // Baseado no FIT SDK da Garmin
