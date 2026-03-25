@@ -40,7 +40,29 @@ app.get('/', (req, res) => {
   });
 });
 
-// ─── CLAUDE PROXY ─────────────────────────────────────────────────
+// ─── LOGIN POR CÓDIGO ─────────────────────────────────────────────
+// POST /api/login — recebe {code} e retorna {user_id, name}
+app.post('/api/login', async (req, res) => {
+  const code = (req.body?.code || '').trim().toUpperCase();
+  if (!code) return res.status(400).json({ error: 'Código obrigatório.' });
+
+  const { data, error } = await supabase
+    .from('access_codes')
+    .select('user_id, name, code')
+    .eq('code', code)
+    .maybeSingle();
+
+  if (error) return res.status(500).json({ error: error.message });
+  if (!data) return res.status(401).json({ error: 'Código inválido. Verifique e tente novamente.' });
+
+  // Atualiza last_login
+  await supabase.from('access_codes')
+    .update({ last_login: new Date().toISOString() })
+    .eq('code', code);
+
+  console.log(`[login] ${data.name} (${code}) entrou`);
+  res.json({ user_id: data.user_id, name: data.name, code: data.code });
+});
 app.post('/api/claude', async (req, res) => {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return res.status(500).json({ error: 'ANTHROPIC_API_KEY não configurada.' });
