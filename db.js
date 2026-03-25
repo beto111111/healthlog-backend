@@ -1,27 +1,20 @@
-// db.js — Cliente Supabase
-import { createClient } from '@supabase/supabase-js';
+// db.js — Cliente Supabase (CommonJS)
+const { createClient } = require('@supabase/supabase-js');
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_KEY  // service role key (bypass RLS)
+  process.env.SUPABASE_SERVICE_KEY
 );
 
-// ─── HELPERS ──────────────────────────────────────────────────────
-
-// Garante que o "dia" existe antes de inserir dados nele
-export async function ensureDay(userId, date) {
+async function ensureDay(userId, date) {
   const { error } = await supabase
     .from('days')
-    .upsert(
-      { user_id: userId, date },
-      { onConflict: 'user_id,date', ignoreDuplicates: true }
-    );
+    .upsert({ user_id: userId, date }, { onConflict: 'user_id,date', ignoreDuplicates: true });
   if (error && error.code !== '23505') throw error;
   return date;
 }
 
-// Busca um dia completo com todas as entradas da timeline
-export async function getDayFull(userId, date) {
+async function getDayFull(userId, date) {
   const [dayRes, timelineRes, mealsRes, workoutsRes, planRes] = await Promise.all([
     supabase.from('days').select('*').eq('user_id', userId).eq('date', date).maybeSingle(),
     supabase.from('timeline_entries').select('*').eq('user_id', userId).eq('date', date).order('hour'),
@@ -29,7 +22,6 @@ export async function getDayFull(userId, date) {
     supabase.from('workout_sets').select('*').eq('user_id', userId).eq('date', date).order('set_number'),
     supabase.from('day_plans').select('*').eq('user_id', userId).eq('plan_date', date).maybeSingle(),
   ]);
-
   return {
     day: dayRes.data,
     timeline: timelineRes.data || [],
@@ -39,77 +31,41 @@ export async function getDayFull(userId, date) {
   };
 }
 
-// Busca os últimos N dias (para análises e panorama)
-export async function getRecentDays(userId, days = 7) {
+async function getRecentDays(userId, days = 7) {
   const { data } = await supabase
-    .from('days')
-    .select('*')
-    .eq('user_id', userId)
-    .order('date', { ascending: false })
-    .limit(days);
+    .from('days').select('*').eq('user_id', userId)
+    .order('date', { ascending: false }).limit(days);
   return data || [];
 }
 
-// Volume muscular da semana atual
-export async function getWeekMuscleVolume(userId, weekStart) {
+async function getWeekMuscleVolume(userId, weekStart) {
   const { data } = await supabase
-    .from('weekly_muscle_volume')
-    .select('*')
-    .eq('user_id', userId)
-    .eq('week_start', weekStart);
+    .from('weekly_muscle_volume').select('*')
+    .eq('user_id', userId).eq('week_start', weekStart);
   return data || [];
 }
 
-// Atualiza volume muscular semanal (upsert)
-export async function upsertMuscleVolume(userId, weekStart, muscleGroup, sets, reps, volumeKg) {
-  await supabase
-    .from('weekly_muscle_volume')
-    .upsert({
-      user_id: userId,
-      week_start: weekStart,
-      muscle_group: muscleGroup,
-      total_sets: sets,
-      total_reps: reps,
-      total_volume_kg: volumeKg,
-      updated_at: new Date().toISOString(),
-    }, {
-      onConflict: 'user_id,week_start,muscle_group',
-      // incrementar em vez de substituir
-    });
-}
-
-// Salva análise de IA
-export async function saveAIAnalysis(userId, date, type, contextData, result) {
-  const { data, error } = await supabase
+async function saveAIAnalysis(userId, date, type, contextData, result) {
+  const { data } = await supabase
     .from('ai_analyses')
     .insert({
-      user_id: userId,
-      date,
-      type,
-      context_data: contextData,
-      result,
+      user_id: userId, date, type,
+      context_data: contextData, result,
       summary: result.resumo || result.summary,
       main_insight: result.insight_principal || result.main_insight,
       recommendation: result.recomendacao || result.recommendation,
       correlations: result.correlacoes || result.correlations,
     })
-    .select()
-    .maybeSingle();
+    .select().maybeSingle();
   return data;
 }
 
-// Busca última análise de um tipo para um dia
-export async function getLastAnalysis(userId, date, type) {
+async function getLastAnalysis(userId, date, type) {
   const { data } = await supabase
-    .from('ai_analyses')
-    .select('*')
-    .eq('user_id', userId)
-    .eq('date', date)
-    .eq('type', type)
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
+    .from('ai_analyses').select('*')
+    .eq('user_id', userId).eq('date', date).eq('type', type)
+    .order('created_at', { ascending: false }).limit(1).maybeSingle();
   return data;
 }
 
-export default supabase;
+module.exports = { supabase, ensureDay, getDayFull, getRecentDays, getWeekMuscleVolume, saveAIAnalysis, getLastAnalysis };

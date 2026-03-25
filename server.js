@@ -1,11 +1,8 @@
-// server.js — HealthLog v2 Backend
-import express from 'express';
-import multer from 'multer';
-import supabase, {
-  ensureDay, getDayFull, getRecentDays,
-  saveAIAnalysis, getLastAnalysis, getWeekMuscleVolume
-} from './db.js';
-import { parseFitFile, getActivityDate, getActivityHour } from './fitParser.js';
+// server.js — HealthLog v2 Backend (CommonJS)
+const express = require('express');
+const multer = require('multer');
+const { supabase, ensureDay, getDayFull, getRecentDays, saveAIAnalysis, getLastAnalysis, getWeekMuscleVolume } = require('./db.js');
+const { parseFitFile, getActivityDate, getActivityHour } = require('./fitParser.js');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -138,7 +135,6 @@ app.put('/api/day/:date', requireUserId, async (req, res) => {
     const { data } = await supabase.from('days').select('*').eq('user_id', req.userId).eq('date', req.params.date).maybeSingle();
     res.json(data);
   } catch (e) { res.status(500).json({ error: e.message }); }
-});
 });
 
 // GET /api/days?limit=7 — últimos N dias
