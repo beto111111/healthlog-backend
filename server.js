@@ -1,5 +1,30 @@
 // server.js — HealthLog v2 Backend (CommonJS)
 const express = require('express');
+
+// Helper: parse JSON from AI response safely, even if truncated
+function safeParseAI(text) {
+  const clean = text.replace(/```json|```/g, '').trim();
+  try {
+    return JSON.parse(clean);
+  } catch(e) {
+    // Try to recover truncated JSON by closing open structures
+    let fixed = clean;
+    // Count open braces/brackets
+    let braces = 0, brackets = 0;
+    for (const c of fixed) {
+      if (c==='{') braces++; else if (c==='}') braces--;
+      if (c==='[') brackets++; else if (c===']') brackets--;
+    }
+    // Remove trailing incomplete entry
+    fixed = fixed.replace(/,\s*"[^"]*"?\s*:\s*[^,}\]]*$/, '');
+    fixed = fixed.replace(/,\s*\{[^}]*$/, '');
+    // Close open structures
+    while (brackets > 0) { fixed += ']'; brackets--; }
+    while (braces > 0) { fixed += '}'; braces--; }
+    try { return JSON.parse(fixed); }
+    catch(e2) { return { resumo: text.substring(0, 200), erro: 'JSON parcial' }; }
+  }
+}
 const multer = require('multer');
 const { supabase, ensureDay, getDayFull, getRecentDays, saveAIAnalysis, getLastAnalysis, getWeekMuscleVolume } = require('./db.js');
 const { parseFitFile, getActivityDate, getActivityHour } = require('./fitParser.js');
@@ -301,8 +326,8 @@ app.post('/api/import/fit', requireUserId, upload.single('file'), async (req, re
 
 // ─── REFEIÇÕES ────────────────────────────────────────────────────
 
-// POST /api/meal/:date
-app.post('/api/meal/:date', requireUserId, async (req, res) => {
+// POST /api/meal/log/:date — rota legada de refeição por data (renomeada para não conflitar)
+app.post('/api/meal/log/:date', requireUserId, async (req, res) => {
   try {
     await ensureDay(req.userId, req.params.date);
     const { data, error } = await supabase
@@ -311,7 +336,6 @@ app.post('/api/meal/:date', requireUserId, async (req, res) => {
       .select().maybeSingle();
     if (error) return res.status(500).json({ error: error.message });
 
-    // Atualiza totais do dia
     const { data: meals } = await supabase
       .from('meals').select('kcal, prot_g, carb_g, fat_g')
       .eq('user_id', req.userId).eq('date', req.params.date);
@@ -324,10 +348,8 @@ app.post('/api/meal/:date', requireUserId, async (req, res) => {
     }), { kcal: 0, prot: 0, carb: 0, fat: 0 });
 
     await supabase.from('days').update({
-      meals_kcal_total: totals.kcal,
-      meals_prot_total: totals.prot,
-      meals_carb_total: totals.carb,
-      meals_fat_total: totals.fat,
+      meals_kcal_total: totals.kcal, meals_prot_total: totals.prot,
+      meals_carb_total: totals.carb, meals_fat_total: totals.fat,
     }).eq('user_id', req.userId).eq('date', req.params.date);
 
     res.json(data);
@@ -386,7 +408,7 @@ app.post('/api/analysis/morning/:date', requireUserId, async (req, res) => {
       headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
       body: JSON.stringify({
         model: 'claude-sonnet-4-6',
-        max_tokens: 800,
+        max_tokens: 2000,
         system: `Você é especialista em medicina do sono, cronobiologia e otimização de performance.
 Analise os dados de sono de hoje em correlação com o dia de ontem.
 Seja específico, cite valores reais, e dê recomendações acionáveis.
@@ -406,7 +428,7 @@ Retorne APENAS JSON válido:
 
     const text = await r.text();
     const aiData = JSON.parse(text);
-    const result = JSON.parse(aiData.content[0].text.replace(/```json|```/g, '').trim());
+    const result = safeParseAI(aiData.content[0].text);
 
     await saveAIAnalysis(req.userId, today, 'morning_sleep', context, result);
     res.json(result);
@@ -451,7 +473,7 @@ app.post('/api/analysis/day/:date', requireUserId, async (req, res) => {
       headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
       body: JSON.stringify({
         model: 'claude-sonnet-4-6',
-        max_tokens: 1000,
+        max_tokens: 2000,
         system: `Especialista em medicina de estilo de vida e Hábitos Atômicos de James Clear.
 Analise o dia e crie um plano para o dia seguinte com habit stacking.
 Identidade da pessoa: "${profile?.identity_statement}". Objetivo: "${profile?.primary_goal}".
@@ -475,7 +497,7 @@ Retorne APENAS JSON válido:
 
     const text = await r.text();
     const aiData = JSON.parse(text);
-    const result = JSON.parse(aiData.content[0].text.replace(/```json|```/g, '').trim());
+    const result = safeParseAI(aiData.content[0].text);
 
     // Salva plano do dia seguinte
     const nextDate = getNextDate(date);
@@ -709,7 +731,7 @@ app.post('/api/meal/analyze', requireUserId, async (req, res) => {
       headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
       body: JSON.stringify({
         model: 'claude-sonnet-4-6',
-        max_tokens: 1000,
+        max_tokens: 2000,
         system: `Você é nutricionista especialista em análise visual de alimentos.
 Analise a foto do prato e estime a composição nutricional completa.
 Perfil do usuário: ${weight}kg, ${height}cm, ${age} anos. Necessidade calórica diária estimada: ${dailyKcal} kcal. Objetivo: ${goal}.
@@ -752,7 +774,7 @@ Retorne APENAS JSON válido (sem markdown):
 
     const aiData = await r.json();
     const text = aiData.content?.[0]?.text || '{}';
-    const nutrition = JSON.parse(text.replace(/```json|```/g, '').trim());
+    const nutrition = safeParseAI(text);
 
     // Recalcula %VD com base no perfil real
     nutrition.vd_percent = {
