@@ -882,3 +882,33 @@ app.post('/api/meal/:id/react', requireUserId, async (req, res) => {
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 });
+
+// ─── USER RESET ───────────────────────────────────────────────────
+app.post('/api/user/reset', requireUserId, async (req, res) => {
+  const uid = req.userId;
+  try {
+    // Delete all user data except the profile row itself
+    await Promise.all([
+      supabase.from('timeline_entries').delete().eq('user_id', uid),
+      supabase.from('workout_sets').delete().eq('user_id', uid),
+      supabase.from('meals').delete().eq('user_id', uid),
+      supabase.from('days').delete().eq('user_id', uid),
+      supabase.from('ai_analyses').delete().eq('user_id', uid),
+      supabase.from('weekly_muscle_volume').delete().eq('user_id', uid),
+      supabase.from('day_plans').delete().eq('user_id', uid),
+    ]);
+    // Reset profile to blank (keep user_id so login still works)
+    await supabase.from('user_profile').update({
+      identity_statement: null, primary_goal: null,
+      good_habits: [], bad_habits: [], habits_to_add: [], habits_to_remove: [],
+      devices: [], weight_kg: null, height_cm: null, age: null,
+      xp_total: 0, streak_days: 0, display_name: null,
+      strava_access_token: null, strava_refresh_token: null,
+    }).eq('user_id', uid);
+    console.log(`[reset] user ${uid} cleared all data`);
+    res.json({ ok: true });
+  } catch(e) {
+    console.error('[reset]', e);
+    res.status(500).json({ error: e.message });
+  }
+});
